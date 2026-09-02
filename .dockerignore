@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+__pycache__
+*.pyc
+data
+logs
+tests
+Server.md
+isif
+DEVELOPMENT_PLAN.md

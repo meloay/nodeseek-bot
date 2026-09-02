@@ -1,0 +1,41 @@
+telegram:
+  admin_id: null
+
+rss:
+  url: "https://rss.nodeseek.com/"
+  poll_interval_seconds: 60
+  timeout_seconds: 10
+  retry_times: 3
+  user_agent: "NodeSeekKeywordBot/1.0 (+private RSS monitor)"
+
+dmit:
+  enabled: true
+  url: "https://www.dmit.io/cart.php?language=chinese"
+  affiliate_url_prefix: "https://www.dmit.io/aff.php?aff=13497"
+  poll_interval_seconds: 60
+  timeout_seconds: 20
+  retry_times: 3
+  impersonate: "chrome"
+
+bwh:
+  enabled: true
+  url: "https://bandwagonhost.com/order/get-data"
+  fallback_url: "https://bwh81.net/order/get-data"
+  affiliate_url_prefix: "https://bandwagonhost.com/aff.php?aff=65719"
+  poll_interval_seconds: 60
+  timeout_seconds: 20
+  retry_times: 3
+  impersonate: "chrome"
+
+users:
+  default_interval_minutes: 5
+  min_interval_minutes: 1
+  max_interval_minutes: 1440
+
+database:
+  path: "./data/nodeseek_monitor.db"
+  retention_days: 90
+
+logging:
+  level: "INFO"
+  file: "./logs/app.log"

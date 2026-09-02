@@ -1,0 +1,24 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?请在 .env 中设置 TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_ID: ${TELEGRAM_ADMIN_ID:-}
+      DATABASE_PATH: /app/data/nodeseek_monitor.db
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: Asia/Shanghai
+    volumes:
+      - bot-data:/app/data
+      - bot-logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+          cpus: "0.50"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  bot-data:
+  bot-logs:

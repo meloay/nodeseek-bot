@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>NodeSeek Sample</title>
+    <link>https://www.nodeseek.com/</link>
+    <description>Test fixture</description>
+    <item>
+      <guid>post-1001</guid>
+      <title>香港 VPS &amp; 流量优惠</title>
+      <link>https://www.nodeseek.com/post-1001-1</link>
+      <author>alice</author>
+      <category>情报</category>
+      <pubDate>Fri, 28 Aug 2026 00:00:00 GMT</pubDate>
+      <description><![CDATA[<p>本月套餐限时优惠，更多内容请查看原帖。</p>]]></description>
+    </item>
+    <item>
+      <guid>post-1002</guid>
+      <title>普通技术讨论</title>
+      <link>https://www.nodeseek.com/post-1002-1</link>
+      <author>bob</author>
+      <category>技术</category>
+      <description>不包含监控词</description>
+    </item>
+  </channel>
+</rss>

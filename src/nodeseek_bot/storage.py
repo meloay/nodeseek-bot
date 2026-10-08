@@ -47,6 +47,8 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
+                    chat_type TEXT NOT NULL DEFAULT 'private',
+                    chat_title TEXT,
                     is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
                     check_interval INTEGER NOT NULL DEFAULT 5 CHECK (check_interval > 0),
                     match_scope TEXT NOT NULL DEFAULT 'title'
@@ -202,20 +204,45 @@ class Storage:
             if "bwh_enabled_since" not in columns:
                 connection.execute("ALTER TABLE users ADD COLUMN bwh_enabled_since TEXT")
 
-    def ensure_user(self, user_id: int, username: str | None) -> User:
+            if "chat_type" not in columns:
+                connection.execute(
+                    "ALTER TABLE users ADD COLUMN chat_type TEXT NOT NULL DEFAULT 'private'"
+                )
+            if "chat_title" not in columns:
+                connection.execute("ALTER TABLE users ADD COLUMN chat_title TEXT")
+
+    def ensure_user(
+        self,
+        user_id: int,
+        username: str | None,
+        chat_type: str = "private",
+        chat_title: str | None = None,
+    ) -> User:
         now = utc_now()
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO users (
-                    user_id, username, is_active, check_interval, match_scope,
+                    user_id, username, chat_type, chat_title,
+                    is_active, check_interval, match_scope,
                     created_at, updated_at, delivery_since
-                ) VALUES (?, ?, 1, ?, 'title', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 1, ?, 'title', ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     username = excluded.username,
+                    chat_type = excluded.chat_type,
+                    chat_title = excluded.chat_title,
                     updated_at = excluded.updated_at
                 """,
-                (user_id, username, self.default_interval, _iso(now), _iso(now), _iso(now)),
+                (
+                    user_id,
+                    username,
+                    chat_type,
+                    chat_title,
+                    self.default_interval,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now),
+                ),
             )
         user = self.get_user(user_id)
         assert user is not None
@@ -840,6 +867,8 @@ class Storage:
         return User(
             user_id=row["user_id"],
             username=row["username"],
+            chat_type=row["chat_type"],
+            chat_title=row["chat_title"],
             is_active=bool(row["is_active"]),
             check_interval=row["check_interval"],
             match_scope=row["match_scope"],

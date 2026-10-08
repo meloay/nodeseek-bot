@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatMemberStatus, ChatType
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from .bwh_service import BwhMonitorService
@@ -35,6 +37,8 @@ HELP_TEXT = """我会监控 NodeSeek 新帖标题并在命中关键字时通知�
 
 含空格的短语可以直接添加，例如：/add 香港 VPS
 多个关键字示例：/add VPS, 优惠, 流量包"""
+
+GROUP_ADMIN_REQUIRED_TEXT = "群组中只有管理员可以修改监控配置。"
 
 DMIT_LOCATION_FLAGS = {"hkg": "🇭🇰", "lax": "🇺🇸", "tyo": "🇯🇵"}
 BWH_REGION_FLAGS = {
@@ -68,12 +72,45 @@ class BotHandlers:
         self.dmit_service = dmit_service
         self.bwh_service = bwh_service
 
-    def _ensure_user(self, update: Update) -> int:
+    async def _ensure_subscriber(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        require_admin: bool = False,
+    ) -> int | None:
+        chat = update.effective_chat
         user = update.effective_user
-        if user is None:
-            raise RuntimeError("缺少 Telegram 用户信息")
-        self.storage.ensure_user(user.id, user.username)
-        return user.id
+        if chat is None:
+            raise RuntimeError("缺少 Telegram 会话信息")
+
+        is_group = chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}
+        if require_admin and is_group:
+            if user is None:
+                if update.effective_message:
+                    await update.effective_message.reply_text(GROUP_ADMIN_REQUIRED_TEXT)
+                return None
+            try:
+                member = await context.bot.get_chat_member(chat.id, user.id)
+            except TelegramError:
+                if update.effective_message:
+                    await update.effective_message.reply_text(
+                        "暂时无法确认管理员身份，请稍后重试。"
+                    )
+                return None
+            if member.status not in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}:
+                if update.effective_message:
+                    await update.effective_message.reply_text(GROUP_ADMIN_REQUIRED_TEXT)
+                return None
+
+        username = getattr(chat, "username", None)
+        if not is_group and user is not None:
+            username = user.username
+        title = getattr(chat, "title", None)
+        if not is_group and user is not None:
+            title = user.full_name
+        self.storage.ensure_user(chat.id, username, str(chat.type), title)
+        return chat.id
 
     @staticmethod
     def _inventory_chunks(header: str, lines: list[str], limit: int = 3500) -> list[str]:
@@ -359,17 +396,27 @@ class BotHandlers:
         return text, markup
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        self._ensure_user(update)
+        subscriber_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if subscriber_id is None:
+            return
         assert update.effective_message
-        await update.effective_message.reply_text(f"欢迎使用 NodeSeek 关键字监控。\n\n{HELP_TEXT}")
+        is_private = update.effective_chat and update.effective_chat.type == ChatType.PRIVATE
+        target = "你" if is_private else "本群"
+        await update.effective_message.reply_text(
+            f"欢迎使用 NodeSeek 关键字监控，后续通知将发送给{target}。\n\n{HELP_TEXT}"
+        )
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        self._ensure_user(update)
+        subscriber_id = await self._ensure_subscriber(update, context)
+        if subscriber_id is None:
+            return
         assert update.effective_message
         await update.effective_message.reply_text(HELP_TEXT)
 
     async def add(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         raw = " ".join(context.args).strip()
         if not raw:
@@ -381,7 +428,7 @@ class BotHandlers:
             return
         existing = self.storage.list_keywords(user_id)
         if len(existing) + len(values) > 50:
-            await update.effective_message.reply_text("每位用户最多可设置 50 个关键字。")
+            await update.effective_message.reply_text("每个会话最多可设置 50 个关键字。")
             return
         added = [value for value in values if self.storage.add_keyword(user_id, value)]
         duplicates = len(values) - len(added)
@@ -393,7 +440,9 @@ class BotHandlers:
         await update.effective_message.reply_text(message + "。")
 
     async def remove(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         keyword = " ".join(context.args).strip()
         if not keyword:
@@ -405,7 +454,9 @@ class BotHandlers:
         )
 
     async def list_keywords(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context)
+        if user_id is None:
+            return
         assert update.effective_message
         keywords = self.storage.list_keywords(user_id)
         if not keywords:
@@ -415,7 +466,9 @@ class BotHandlers:
         await update.effective_message.reply_text("当前关键字：\n" + "\n".join(lines))
 
     async def clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         await update.effective_message.reply_text(
             "确定清空全部关键字吗？",
@@ -430,11 +483,13 @@ class BotHandlers:
         )
 
     async def clear_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
         query = update.callback_query
         if query is None:
             return
         await query.answer()
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         if query.data == "clear:yes":
             count = self.storage.clear_keywords(user_id)
             await query.edit_message_text(f"已清空 {count} 个关键字。")
@@ -442,7 +497,9 @@ class BotHandlers:
             await query.edit_message_text("已取消清空。")
 
     async def interval(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         if len(context.args) != 1:
             await update.effective_message.reply_text("用法：/interval <分钟数>")
@@ -463,19 +520,25 @@ class BotHandlers:
         await update.effective_message.reply_text(f"检查间隔已设置为 {minutes} 分钟。")
 
     async def pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_active(user_id, False)
         await update.effective_message.reply_text("推送已暂停。")
 
     async def resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_active(user_id, True)
         await update.effective_message.reply_text("推送已恢复；暂停期间的历史帖子不会补发。")
 
     async def dmit_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_dmit_enabled(user_id, True)
         await update.effective_message.reply_text(
@@ -483,19 +546,25 @@ class BotHandlers:
         )
 
     async def dmit_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_dmit_enabled(user_id, False)
         await update.effective_message.reply_text("DMIT 补货通知已关闭。")
 
     async def dmit_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context)
+        if user_id is None:
+            return
         assert update.effective_message
         text, markup = self._dmit_home_view(user_id)
         await update.effective_message.reply_text(text, reply_markup=markup)
 
     async def bwh_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_bwh_enabled(user_id, True)
         await update.effective_message.reply_text(
@@ -503,13 +572,17 @@ class BotHandlers:
         )
 
     async def bwh_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context, require_admin=True)
+        if user_id is None:
+            return
         assert update.effective_message
         self.storage.set_bwh_enabled(user_id, False)
         await update.effective_message.reply_text("BandwagonHost 补货通知已关闭。")
 
     async def bwh_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context)
+        if user_id is None:
+            return
         assert update.effective_message
         text, markup = self._bwh_home_view(user_id)
         await update.effective_message.reply_text(text, reply_markup=markup)
@@ -519,7 +592,9 @@ class BotHandlers:
         if query is None:
             return
         await query.answer()
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context)
+        if user_id is None:
+            return
         parts = (query.data or "").split(":")
         if len(parts) < 3 or parts[0] != "stock" or parts[1] not in {"dmit", "bwh"}:
             return
@@ -544,7 +619,9 @@ class BotHandlers:
         await query.edit_message_text(view[0], reply_markup=view[1])
 
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user_id = self._ensure_user(update)
+        user_id = await self._ensure_subscriber(update, context)
+        if user_id is None:
+            return
         assert update.effective_message
         user = self.storage.get_user(user_id)
         assert user

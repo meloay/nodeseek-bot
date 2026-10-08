@@ -1,6 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from telegram.constants import ChatMemberStatus, ChatType
+
 from nodeseek_bot.handlers import BotHandlers
 from nodeseek_bot.models import BwhProduct, DmitProduct
 from nodeseek_bot.storage import Storage
@@ -52,6 +55,70 @@ def make_handlers(tmp_path: Path) -> BotHandlers:
     )
     service = SimpleNamespace(last_check_at=None, last_result=None)
     return BotHandlers(None, storage, service, service, service)  # type: ignore[arg-type]
+
+
+class FakeMessage:
+    def __init__(self) -> None:
+        self.replies: list[str] = []
+
+    async def reply_text(self, text: str, **kwargs: object) -> None:
+        self.replies.append(text)
+
+
+class FakeBot:
+    def __init__(self, status: str) -> None:
+        self.status = status
+        self.member_checks: list[tuple[int, int]] = []
+
+    async def get_chat_member(self, chat_id: int, user_id: int) -> SimpleNamespace:
+        self.member_checks.append((chat_id, user_id))
+        return SimpleNamespace(status=self.status)
+
+
+def group_update(message: FakeMessage) -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(
+            id=-1001234567890,
+            type=ChatType.SUPERGROUP,
+            username="market_group",
+            title="机器交易群",
+        ),
+        effective_user=SimpleNamespace(id=42, username="alice", full_name="Alice"),
+        effective_message=message,
+        callback_query=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_group_admin_can_configure_group_subscription(tmp_path: Path) -> None:
+    handlers = make_handlers(tmp_path)
+    message = FakeMessage()
+    bot = FakeBot(ChatMemberStatus.ADMINISTRATOR)
+    context = SimpleNamespace(args=["VPS"], bot=bot)
+
+    await handlers.add(group_update(message), context)  # type: ignore[arg-type]
+
+    subscriber = handlers.storage.get_user(-1001234567890)
+    assert subscriber
+    assert subscriber.chat_type == ChatType.SUPERGROUP
+    assert subscriber.chat_title == "机器交易群"
+    assert [item.keyword for item in handlers.storage.list_keywords(subscriber.user_id)] == [
+        "VPS"
+    ]
+    assert bot.member_checks == [(-1001234567890, 42)]
+    assert message.replies == ["已添加 1 个关键字：VPS。"]
+
+
+@pytest.mark.asyncio
+async def test_group_member_cannot_change_group_subscription(tmp_path: Path) -> None:
+    handlers = make_handlers(tmp_path)
+    message = FakeMessage()
+    context = SimpleNamespace(args=["VPS"], bot=FakeBot(ChatMemberStatus.MEMBER))
+
+    await handlers.add(group_update(message), context)  # type: ignore[arg-type]
+
+    assert handlers.storage.get_user(-1001234567890) is None
+    assert message.replies == ["群组中只有管理员可以修改监控配置。"]
 
 
 def test_inventory_chunks_preserve_all_lines_within_limit() -> None:

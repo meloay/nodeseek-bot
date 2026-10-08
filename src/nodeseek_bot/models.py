@@ -25,6 +25,8 @@ class Post:
 class User:
     user_id: int
     username: str | None
+    chat_type: str
+    chat_title: str | None
     is_active: bool
     check_interval: int
     match_scope: str
